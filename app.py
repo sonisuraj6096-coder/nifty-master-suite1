@@ -34,16 +34,19 @@ def calculate_brokerage(lots, premium):
     return round(fixed_brokerage + stt + txn_charges + gst, 2)
 
 def log_trade(outcome, pts, net, mood, strategy, premium, lots, screenshot_file=None):
-    with open(LOCK_FILE, "w") as f: f.write(str(date.today()))
+    # Lock the trade for the day
+    with open(LOCK_FILE, "w") as f: 
+        f.write(str(date.today()))
     
-    img_path = "None"
+    img_path = "" # Default to empty string instead of "None" string
     if screenshot_file:
-        img_path = os.path.join(SCREENSHOT_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        img_path = os.path.join(SCREENSHOT_DIR, filename)
         with open(img_path, "wb") as f:
             f.write(screenshot_file.getbuffer())
 
     new_data = pd.DataFrame([{
-        "Timestamp": datetime.now(), 
+        "Timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
         "Outcome": outcome, 
         "Strategy": strategy,
         "Points": pts, 
@@ -83,13 +86,12 @@ if not st.session_state['authenticated']:
             st.rerun()
     st.stop()
 
-# --- 4. SIDEBAR (RISK & SURVIVAL ENGINE) ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.header("💰 Risk Management")
     capital = st.number_input("Trading Capital (₹)", value=100000)
     risk_pct = st.slider("Risk per Trade %", 0.5, 5.0, 1.0)
     
-    # --- Risk of Ruin Stats ---
     if os.path.exists(JOURNAL_FILE):
         df_stats = pd.read_csv(JOURNAL_FILE)
         if not df_stats.empty:
@@ -97,16 +99,10 @@ with st.sidebar:
             avg_win = df_stats[df_stats['Net_PnL'] > 0]['Net_PnL'].mean() or 1
             avg_loss = df_stats[df_stats['Net_PnL'] < 0]['Net_PnL'].abs().mean() or 1
             rrr = avg_win / avg_loss if avg_loss > 0 else 1.0
-            
-            # Risk of Ruin Formula: ((1-Edge)/(1+Edge))^Units
-            edge = (win_rate * rrr) - (1 - win_rate)
-            ror = ((1 - edge) / (1 + edge)) ** (capital / (capital * (risk_pct/100))) if edge > 0 else 1.0
-            
             st.divider()
             st.subheader("🛡️ Survival Metrics")
-            st.metric("Risk of Ruin", f"{ror*100:.2f}%")
+            st.metric("Win Rate", f"{win_rate*100:.1f}%")
             st.metric("Recovery Factor", f"{rrr:.2f} RR")
-            st.progress(1.0 - ror, text="Capital Longevity")
 
     st.divider()
     st.subheader("Position Sizer")
@@ -164,19 +160,24 @@ with tab1:
 with tab2:
     if os.path.exists(JOURNAL_FILE):
         df = pd.read_csv(JOURNAL_FILE)
-        df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-        
-        st.header("📈 Equity Curve")
-        df['Cumulative_PnL'] = df['Net_PnL'].cumsum()
-        st.line_chart(df, x="Timestamp", y="Cumulative_PnL")
+        # Ensure Screenshot column is treated as string and handles NaNs
+        df['Screenshot'] = df['Screenshot'].fillna("")
         
         st.header("📋 Trade Logs")
-        # Show table with ability to see screenshots
         st.dataframe(df.sort_values(by="Timestamp", ascending=False), use_container_width=True)
         
-        selected_trade = st.selectbox("View Screenshot for Trade Time:", df['Timestamp'])
+        st.divider()
+        st.subheader("View Trade Setup")
+        selected_trade = st.selectbox("Select Trade by Timestamp:", df['Timestamp'].unique())
+        
+        # Filter row safely
         row = df[df['Timestamp'] == selected_trade].iloc[0]
-        if row['Screenshot'] != "None":
-            st.image(row['Screenshot'], caption=f"Setup for {row['Strategy']} at {selected_trade}")
+        img_path = str(row['Screenshot'])
+        
+        # KEY FIX: Check if path exists and is not empty before rendering image
+        if img_path and img_path.strip() != "" and os.path.exists(img_path):
+            st.image(img_path, caption=f"Setup for {row['Strategy']} at {selected_trade}")
+        else:
+            st.info("No screenshot available for this specific trade.")
     else:
         st.info("No trades logged yet.")
